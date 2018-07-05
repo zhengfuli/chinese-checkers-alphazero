@@ -2,6 +2,7 @@
 
 import numpy as np
 import settings
+import copy
 
 # tree node of the Monte Carlo Tree
 class TreeNode(object):
@@ -9,23 +10,20 @@ class TreeNode(object):
         # parent node
         self.parent = parent
 
-        # map action to child node
+        # map a move to a resulting child node
         self.children = {}
 
         # visit count
         self.N = 0
 
-        # average action value
+        # average move value
         self.Q = 0.0
 
-        # overall action value
-        self.W = 0.0
-
-        # prior probability, the chance of the action that leads to this node is chosen
+        # prior probability, the chance that the move which leads to this node is chosen
         self.P = prob
 
-        # upper confidence bounds(UCB) for Trees(UCT)
-        # plus bonus u to encourage exploration during searching
+        # upper confidence bounds(UCB) for Trees(UCT) algorithm
+        # average plus bonus u to encourage exploration during searching
         self.u = 0.0
 
     def isLeafNode(self):
@@ -34,29 +32,29 @@ class TreeNode(object):
     def isRoot(self):
         return not self.parent
 
+
 class MCTS(object):
     def __init__(self, nn):
 
         # policy&value network
         self.nn = nn
 
-        # each MCTS simulation starts from am empty root, the only difference is what state in the self-play
-        # is this root corresponding to in this simulation
+        # each MCTS simulation starts from am empty root, the only difference is what state of board
+        # in the self-play is this root corresponding to in this simulation
         prob = (1.0 - settings.noise_eps) * 1.0 + settings.noise_eps * np.random.dirichlet([settings.dirichlet_alpha * 1.0])
         self.root = TreeNode(None, prob)
 
-
-    # select an action given a non-leaf node during MCTS simulation
+    # select a move given a non-leaf node during MCTS simulation
     # a = argmax(a)(Q(s,a) + u(s,a))
     def select(self, node):
         """
         :param node: MCTS TreeNode
-        :return: a tuple of action and resulting TreeNode
+        :return: a tuple of move and resulting TreeNode
         """
         res = ()
         max_Q_plus_u = 0.0
 
-        # calculate Q + U and return the action that maximizes the overall action value
+        # calculate Q + U and return the move that maximizes the overall action(move) value
         for child in node.children.items():
             node = child[1]
             u = settings.c_puct * node.P * np.sqrt(node.parent.N / (1 + node.N))
@@ -67,19 +65,31 @@ class MCTS(object):
 
         return res
 
-
-    # expand a leaf node given all possible actions and their probabilities
-    def expand(self, node, action_probs):
+    # expand a leaf node given all possible moves and their probabilities
+    def expand(self, node, valid_moves, move_probs):
         """
         :param node: leaf node that has no children
-        :param action_probs: valid actions and probabilities predicted by NN for this node (represents a state)
+        :param valid_moves: valid moves at this state
+        :param move_probs: all move probabilities predicted by NN for this node (represents a state)
         :return: add children in-place
         """
-        for action, prob in action_probs:
-            if action not in node.children:
-                child = TreeNode(node, prob)
-                node.children[action] = child
+        # calculate total probabilities of valid moves for normalizing
+        valid_move_probs = 0.0
+        # only expand valid moves and then normalize probabilities
+        for move in valid_moves:
+            assert(move in move_probs)
+            prob = move_probs[move]
+            valid_move_probs += prob
+            child = TreeNode(node, prob)
+            node.children[move] = child
 
+        # if there is no valid move now, the node's children should be empty
+        if valid_move_probs == 0.0:
+            assert(node.children  == {})
+        else:
+            # normalize probabilities
+            for move, child_node in node.children.items():
+                child_node.P /= valid_move_probs
 
     # recursively update node parameters using leaf node value in the back-up way
     # this is in the simulation process rather than self-play and a leaf node refers
@@ -90,50 +100,60 @@ class MCTS(object):
         :param value: leaf node value or the opposite value
         :return: update in-place
         """
-        if node:
+        cur_node = node
+        if cur_node:
             # being visited once more
-            node.N += 1
+            cur_node.N += 1
 
-            # overall value increases
-            node.W += value
-
-            # update average action value, this is the AlphaGo version, APV-MCTS
-            # for AlphaZero, it's like node.Q += 1.0*(value-node.Q)/node.N
-            node.Q = node.W / node.N
+            # update average action value
+            cur_node.Q += 1.0 * (value - cur_node.Q) / cur_node.N
 
             # update bonus u
-            node.u = settings.c_puct * node.P * np.sqrt(node.parent.N / (1 + node.N))
+            cur_node.u = settings.c_puct * cur_node.P * np.sqrt(cur_node.parent.N / (1 + cur_node.N))
 
             # recursively update
             # the tree is made of nodes that represent both you and your rival's actions
             # and thus value should be alternatively opposite during recursion
-            self.backup(node.parent, -value)
-
-
+            self.backup(cur_node.parent, -value)
 
     # select, expand to search for a leaf node and then update
-    # this is one simulation process, state is the board state in the self-play when this simulation starts
+    # this is one complete simulation process
     def search(self, state):
+        """
+        :param state: board state in the self-play process when this simulation starts
+        :return: modify the Monte Carlo tree in-place
+        """
+        # do not modify the argument state as you are just conducting simulations
+        # while this state cannot be changed before all simulations are done
+        sim_state = copy.deepcopy(state)
+
         node = self.root
         while not node.isLeafNode():
-            # select action when this node is expanded
-            action, node = self.select(node)
-            # update state using this action
-            state.execute_move(action)
+            # select a move when this node is already expanded
+            move, node = self.select(node)
+            # update state executing this move
+            sim_state.executeMove(move)
 
         # assign the value when game is ended
-        if state.isEnded():
-            winner = state.getWinner()
-            # winner = 0 for tie, 1 for player 1 and 2 for player 2
+        if sim_state.isEnded():
+            winner = sim_state.getWinner()
+            # winner = 0 for a tie, 1 for player 1 and 2 for player 2
             if winner == 0:
                 value = 0.0
             else:
-                value = 1.0 if winner == state.getCurretnPlayer() else -1.0
+                value = 1.0 if winner == sim_state.getCurretnPlayer() else -1.0
         else:
+            # get valid actions/moves at this state when the game is not ended yet
+            valid_moves = sim_state.getValidMoves()
+
             # evaluate the leaf node using neural network while game is not ended
-            action_probs, value = self.nn(node)
+            # the move probabilities will cover both valid and invalid moves
+            # but expand function will handle
+            move_probs, value = self.nn(node)
+
             # expand this leaf node
-            self.expand(node, action_probs)
+            self.expand(node, valid_moves, move_probs)
 
         # update nodes' weights in the path to this leaf node
-        self.backup()
+        # starting from the leaf node's parent
+        self.backup(node, -value)

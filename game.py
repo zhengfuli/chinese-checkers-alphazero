@@ -3,11 +3,14 @@ class Game(object):
     def __init__(self):
         pass
 
-    def execute_move(self, move):
+    def executeMove(self, move):
         pass
 
     def isEnded(self):
         pass
 
     def getWinner(self):
+        pass
+
+    def getValidMoves(self):
         pass
