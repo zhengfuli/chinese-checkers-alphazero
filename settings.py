@@ -4,6 +4,9 @@ import numpy as np
 # larger value means more exploitation while smaller value means more exploration
 c_puct = 5
 
+# hyper-parameter that controls the degree of exploration when employing actions decided by MCTS simulations
+temperature = 1e-3
+
 # number of MCTS simulations, 1600 in AlphaGo
 sim_count = 1200
 

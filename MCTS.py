@@ -26,10 +26,10 @@ class TreeNode(object):
         # average plus bonus u to encourage exploration during searching
         self.u = 0.0
 
-    def isLeafNode(self):
+    def _isLeafNode(self):
         return self.children == {}
 
-    def isRoot(self):
+    def _isRoot(self):
         return not self.parent
 
 
@@ -46,7 +46,7 @@ class MCTS(object):
 
     # select a move given a non-leaf node during MCTS simulation
     # a = argmax(a)(Q(s,a) + u(s,a))
-    def select(self, node):
+    def _select(self, node):
         """
         :param node: MCTS TreeNode
         :return: a tuple of move and resulting TreeNode
@@ -66,7 +66,7 @@ class MCTS(object):
         return res
 
     # expand a leaf node given all possible moves and their probabilities
-    def expand(self, node, valid_moves, move_probs):
+    def _expand(self, node, valid_moves, move_probs):
         """
         :param node: leaf node that has no children
         :param valid_moves: valid moves at this state
@@ -94,7 +94,7 @@ class MCTS(object):
     # recursively update node parameters using leaf node value in the back-up way
     # this is in the simulation process rather than self-play and a leaf node refers
     # to game ending or a node that has not been expanded in previous simulation iterations
-    def backup(self, node, value):
+    def _backup(self, node, value):
         """
         :param node: tree nodes that are in the path to a leaf node
         :param value: leaf node value or the opposite value
@@ -114,11 +114,11 @@ class MCTS(object):
             # recursively update
             # the tree is made of nodes that represent both you and your rival's actions
             # and thus value should be alternatively opposite during recursion
-            self.backup(cur_node.parent, -value)
+            self._backup(cur_node.parent, -value)
 
     # select, expand to search for a leaf node and then update
     # this is one complete simulation process
-    def search(self, state):
+    def _search(self, state):
         """
         :param state: board state in the self-play process when this simulation starts
         :return: modify the Monte Carlo tree in-place
@@ -130,7 +130,7 @@ class MCTS(object):
         node = self.root
         while not node.isLeafNode():
             # select a move when this node is already expanded
-            move, node = self.select(node)
+            move, node = self._select(node)
             # update state executing this move
             sim_state.executeMove(move)
 
@@ -152,8 +152,50 @@ class MCTS(object):
             move_probs, value = self.nn(node)
 
             # expand this leaf node
-            self.expand(node, valid_moves, move_probs)
+            self._expand(node, valid_moves, move_probs)
 
         # update nodes' weights in the path to this leaf node
         # starting from the leaf node's parent
-        self.backup(node, -value)
+        self._backup(node, -value)
+
+    def _simulate(self, state):
+        """
+        :param state: current state board
+        :return: execute assigned number of MCTS simulations and return the policy
+        """
+        for n in range(settings.sim_count):
+            self._search(state)
+
+        # calculate policy/probability distribution over the state after simulations using softmax
+        moves = list(self.root.children.keys())
+        visit_count = list(self.root.children.values())
+
+        # prob(xi) = exp(ni) / sum(exp(ni))
+        def softmax(n):
+            probs = np.exp(n - np.max(n))
+            probs /= np.sum(probs)
+            return probs
+
+        # pi(a|s) = N(s,a)**(1/temp) / sum(i)(N(s,ai)**(1/temp))
+        # when visit times is 1 log() can be zero thus plus a bias
+        policy = softmax(1.0 / settings.temperature * np.log(np.array(visit_count)) + 1e-10)
+
+        return moves, policy
+
+    # after executing a certain move in the self-play, the MCST should be updated
+    def _update_tree(self, move):
+        if move in self.root.children:
+            self.root = self.root.children[move]
+            self.root.parent = None
+        else:
+            self.root = TreeNode(None, 1.0)
+
+# handle actions between two players when using MCTS class
+class MCTSPlayer(object):
+    def __init__(self, selfplay):
+        self.selfplay = selfplay
+
+    def _set_player_id(self, id):
+        self.player_id = id
+
+    def act(self):
