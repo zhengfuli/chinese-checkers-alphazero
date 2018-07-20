@@ -1,5 +1,5 @@
 #implement basic Monte Carlo Tree Search algorithm
-
+import time
 import numpy as np
 import settings
 import copy
@@ -35,6 +35,7 @@ class TreeNode(object):
 
 class MCTS(object):
     def __init__(self, nn):
+        np.random.seed(int(time.time()))
 
         # policy&value network
         self.nn = nn
@@ -178,9 +179,9 @@ class MCTS(object):
 
         # pi(a|s) = N(s,a)**(1/temp) / sum(i)(N(s,ai)**(1/temp))
         # when visit times is 1 log() can be zero thus plus a bias
-        policy = softmax(1.0 / settings.temperature * np.log(np.array(visit_count)) + 1e-10)
+        probs = softmax(1.0 / settings.temperature * np.log(np.array(visit_count)) + 1e-10)
 
-        return moves, policy
+        return moves, probs
 
     # after executing a certain move in the self-play, the MCST should be updated
     def _update_tree(self, move):
@@ -192,10 +193,23 @@ class MCTS(object):
 
 # handle actions between two players when using MCTS class
 class MCTSPlayer(object):
-    def __init__(self, selfplay):
+    def __init__(self, selfplay, nn):
         self.selfplay = selfplay
+        self.nn = nn
+        self.MCTS = MCTS(self.nn)
 
     def _set_player_id(self, id):
         self.player_id = id
 
-    def act(self):
+    def _act(self, state):
+        moves, probs = self.MCTS._simulate(state)
+
+        if self.selfplay:
+            # add dirichlet noise for better exploration
+            move = np.random.choice(moves, p=(1.0-settings.noise_eps)*probs + \
+                   settings.noise_eps*np.random.dirichlet(settings.dirichlet_alpha*np.ones(len(probs))))
+        else:
+            move = np.random.choice(moves, p=probs)
+
+        self.MCTS._update_tree(move)
+        return move
